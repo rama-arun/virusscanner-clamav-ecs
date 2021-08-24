@@ -1,0 +1,225 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Deploy a service on AWS Fargate
+
+Parameters:
+
+  VPCId:
+    Type: 'AWS::EC2::VPC::Id'
+    Description: VPC that should house this cluster
+  # PublicSubnetIDs:
+  #   Type: 'List<AWS::EC2::Subnet::Id>'
+  #   Description: Subnet IDs for the ALB
+  PrivateSubnetIDs:
+    Type: 'List<AWS::EC2::Subnet::Id>'
+    Description: Subnet IDs for the Fargate Containers
+  pVirusRepo:
+    Type: String
+    Description: Name of image in ECR for virus scanning repo. Recommendation is to keep the default name.
+    Default: virusscanner
+
+Resources:
+
+  fargateTaskExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: s3
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: 's3:*'
+                Resource: '*'
+        - PolicyName: logs
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: '*'
+        - PolicyName: ecr
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ecr:BatchCheckLayerAvailability'
+                  - 'ecr:GetDownloadUrlForLayer'
+                  - 'ecr:BatchGetImage'
+                Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${pVirusRepo}
+              - Effect: Allow
+                Action:
+                  - 'ecr:GetAuthorizationToken'
+                Resource: '*'
+
+  ecsTaskExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: ECSTaskExecutionRolePolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ecr:GetAuthorizationToken'
+                  - 'ecr:BatchCheckLayerAvailability'
+                  - 'ecr:GetDownloadUrlForLayer'
+                  - 'ecr:BatchGetImage'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents' 
+                Resource: '*'
+  
+  eventBridgeManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties: 
+      Description: Managed Role for Event Bridge and S3
+      ManagedPolicyName: EventBridgeManagedPolicy
+      Path: /service-role/
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'ecs:RunTask'
+            Resource:
+              - !Sub arn:${AWS::Partition}:ecs:*:${AWS::AccountId}:task-definition/virusscanner-task
+            Condition:
+              ArnLike:
+                ecs:cluster: !Sub arn:${AWS::Partition}:ecs:*:${AWS::AccountId}:cluster/virusscanner
+          - Effect: Allow
+            Action: 'iam:PassRole'
+            Resource:
+              - '*'
+            Condition:
+              StringLike:
+                iam:PassedToService: 'ecs-tasks.amazonaws.com'
+  
+  eventBridgeRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /service-role/
+      ManagedPolicyArns:
+        - !Ref eventBridgeManagedPolicy
+
+  fargateLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /fargate/${AWS::StackName}
+      RetentionInDays: 7
+
+  fargateTaskDefinition:
+    Type: 'AWS::ECS::TaskDefinition'
+    Properties:
+      Family: 'virusscanner-task'
+      Cpu: '2048'
+      Memory: '4096'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      TaskRoleArn: !Ref fargateTaskExecutionRole
+      ExecutionRoleArn: !GetAtt ecsTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: 'virusscanner'
+          Cpu: 2048
+          Memory: 4096
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${pVirusRepo}
+          PortMappings:
+            - ContainerPort: 3310
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref fargateLogGroup
+              awslogs-stream-prefix: !Ref AWS::StackName
+
+  fargateService:
+    Type: 'AWS::ECS::Service'
+    Properties:
+      ServiceName: 'virusscanner-service'
+      Cluster: 'virusscanner'
+      LaunchType: FARGATE
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 75
+      DesiredCount: 0
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - !Ref taskSecurityGroup
+          Subnets: !Ref PrivateSubnetIDs
+      TaskDefinition: !Ref fargateTaskDefinition
+
+  clamWorkerEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: An event rule to trigger ClamAV worker
+      Name: ClamWorkerEventRule
+      EventPattern:
+        detail-type:
+          - 'AWS API Call via CloudTrail'
+        source:
+          - 'aws.s3'
+        detail:
+          eventSource:
+            - 's3.amazonaws.com'
+          eventName:
+            - 'PutObject'
+      Targets:
+        - Arn: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:cluster/virusscanner
+          RoleArn: !GetAtt eventBridgeRole.Arn
+          Id: '1'
+          EcsParameters:
+            LaunchType: FARGATE
+            TaskCount: 1
+            TaskDefinitionArn: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/virusscanner-task
+            NetworkConfiguration:
+              AwsVpcConfiguration:
+                AssignPublicIp: DISABLED
+                SecurityGroups:
+                  - !Ref taskSecurityGroup
+                Subnets: !Ref PrivateSubnetIDs
+            Group: 'avscanner'
+          InputTransformer:
+            InputPathsMap:
+              s3-bucket: '$.detail.requestParameters.bucketName'
+              s3-key: '$.detail.requestParameters.key'
+            InputTemplate: "{\"containerOverrides\": [{\"name\": \"virusscanner\",\"environment\": [{\"name\":\"BUCKET\",\"value\": \"<s3-bucket>\"},{\"name\": \"KEY\",\"value\":\"<s3-key>\"}]}]}"
+
+  taskSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Access to the frontend loadbalancer
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          Description: TCP Port from Load Balancer
+          IpProtocol: tcp
+          FromPort: 3310
+          ToPort: 3310
+      VpcId: !Ref VPCId

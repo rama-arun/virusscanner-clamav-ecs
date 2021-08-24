@@ -1,0 +1,19 @@
+FROM public.ecr.aws/amazonlinux/amazonlinux:latest
+RUN yum update -y
+RUN amazon-linux-extras install epel -y
+RUN yum install unzip -y
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+RUN unzip awscliv2.zip
+RUN ./aws/install
+RUN yum install clamav clamd -y
+RUN sed -i -e "s/^Example/#Example/" /etc/clamd.d/scan.conf
+RUN sed -i -e "s/^Example/#Example/" /etc/freshclam.conf
+RUN freshclam
+
+ENV KEY=,SECRET=,REGION=,BUCKET=,BUCKET_PATH=/,PARAMS=
+
+ADD *.sh /tmp
+RUN chmod +x /tmp/*.sh
+
+ENTRYPOINT ["sh", "/tmp/sync.sh"]
+CMD [""]

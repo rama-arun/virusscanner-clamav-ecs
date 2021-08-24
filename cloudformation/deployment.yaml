@@ -1,0 +1,98 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: Nested Fargate Stack deployment
+
+Metadata:
+
+  Authors:
+    Description: Rama Arun
+
+Parameters:
+
+  ProjectName:
+    Description: Project Name (used for Tagging)
+    Type: String
+  BucketName:
+    Description: Bucket name where nested templates live
+    Type: String
+
+  CodeRepositoryURL:
+    Description: URL of the repo which contains CFN template.
+    Type: String
+
+  DefenseBuildspecLocation:
+    Description: Location of buildspec configuration
+    Type: String
+  DefenseEnvironmentType:
+    Description: Type of build environment to use for related builds.
+    Type: String
+    AllowedValues:
+      - WINDOWS_CONTAINER
+      - LINUX_CONTAINER
+  DefenseComputeType:
+    Description: Compute resources the build project will use to build.
+    Type: String
+    AllowedValues:
+      - BUILD_GENERAL1_SMALL
+      - BUILD_GENERAL1_MEDIUM
+      - BUILD_GENERAL1_LARGE
+  DefenseBuildImage:
+    Description: System Image identifier of the image to use for code build
+    Type: String
+
+Resources:
+  baseECR:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: cloudformation/base/ecr.yaml
+
+  baseNetworking:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: cloudformation/base/vpc-networking.yaml
+
+  fargateCluster:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: cloudformation/fargate/fargate-cluster.yaml
+
+  fargateService:
+    DependsOn: [ fargateCluster, baseNetworking ]
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Parameters:
+        VPC:
+          !GetAtt [ baseNetworking, Outputs.VPC ]
+        PrivateSubnetIDs:
+          !GetAtt [ baseNetworking, Outputs.SubnetsPrivate ]
+        PublicSubnetIDs:
+          !GetAtt [ baseNetworking, Outputs.SubnetsPublic ]
+      TemplateURL: cloudformation/fargate/fargate-service.yaml
+
+  virusscanCodebuild:
+    DependsOn: [ baseECR, baseNetworking, fargateCluster, fargateService ]
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Parameters:
+        VPC:
+          !GetAtt [ baseNetworking, Outputs.VPC ]
+        SubnetIDs:
+          !GetAtt [ baseNetworking, Outputs.SubnetsPrivate ]
+        FargateCluster:
+          !GetAtt [ fargateCluster, Outputs.FargateCluster ]
+        FargateService:
+          !Ref FargateServiceName
+        CodeRepositoryURL:
+          !Ref CodeRepositoryURL
+        BuildspecLocation:
+          !Ref DefenseBuildspecLocation
+        ImageRepoName:
+          !Ref DefenseContainerName
+        EnvironmentType:
+          !Ref DefenseEnvironmentType
+        ComputeType:
+          !Ref DefenseComputeType
+        BuildImage:
+          !Ref DefenseBuildImage
+      TemplateURL: !Sub 'https://s3.amazonaws.com/${BucketName}/resources/service-slayer/cloudformation/cicd/codebuild.yaml'

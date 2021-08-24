@@ -1,0 +1,25 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: ECR repo creation
+
+Parameters:
+  pRepoName:
+    Type: String
+    Default: virusscanner
+    Description: The name of the ECR repo for the ClamAV worker. Recommendation is to keep the default name.
+
+Resources:
+  VirusscannerRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub ${pRepoName}
+
+Outputs:
+  VirusscannerRepoArn:
+    Value: !GetAtt VirusscannerRepo.Arn
+    Export:
+      Name: VirusscannerRepoArn
+
+  RepoNameURI: 
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${pRepoName}"
+    Export:
+      Name: !Sub RepoNameURI-${AWS::StackName}

@@ -1,0 +1,15 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Deploys a Fargate cluster
+
+Resources:
+
+  FargateCluster:
+    Type: 'AWS::ECS::Cluster'
+    Properties:
+      ClusterName: 'virusscanner'
+
+Outputs:
+
+  FargateCluster:
+    Description: Fargate Cluster
+    Value: !Ref FargateCluster

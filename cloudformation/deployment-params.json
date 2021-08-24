@@ -1,0 +1,20 @@
+[
+    { "ParameterKey":"ProjectName",              "ParameterValue":"Service Slayer" },
+    { "ParameterKey":"BucketName",               "ParameterValue":"devopstar" },
+    { "ParameterKey":"ClassB",                   "ParameterValue":"160" },
+    { "ParameterKey":"ClusterName",              "ParameterValue":"service-slayer-cluster" },
+    { "ParameterKey":"CodeRepositoryURL",        "ParameterValue":"https://github.com/t04glovern/service-slayer" },
+
+    { "ParameterKey":"DefenseServiceName",       "ParameterValue":"service-slayer-defense-api" },
+    { "ParameterKey":"DefenseContainerName",     "ParameterValue":"service-slayer-defense-api" },
+    { "ParameterKey":"DefenseContainerPort",     "ParameterValue":"3000" },
+    { "ParameterKey":"DefenseContainerCpu",      "ParameterValue":"256" },
+    { "ParameterKey":"DefenseContainerMemory",   "ParameterValue":"512" },
+    { "ParameterKey":"DefenseDesiredCount",      "ParameterValue":"2" },
+    { "ParameterKey":"DefenseHealthEndpoint",    "ParameterValue":"/" },
+
+    { "ParameterKey":"DefenseBuildspecLocation", "ParameterValue":"containers/defense-api" },
+    { "ParameterKey":"DefenseEnvironmentType",   "ParameterValue":"LINUX_CONTAINER" },
+    { "ParameterKey":"DefenseComputeType",       "ParameterValue":"BUILD_GENERAL1_SMALL" },
+    { "ParameterKey":"DefenseBuildImage",        "ParameterValue":"aws/codebuild/ubuntu-base:14.04" }
+]

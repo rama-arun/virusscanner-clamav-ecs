@@ -1,0 +1,192 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Deploy a service on AWS Fargate. Relies on an ECR image called 'clamdefs'
+
+###
+### Parameters
+###
+
+Parameters:
+
+  pVPCId:
+    Type: 'AWS::EC2::VPC::Id'
+    Description: VPC for the cluster
+
+  pSubnetIDs:
+    Type: 'List<AWS::EC2::Subnet::Id>'
+    Description: Subnet IDs for the Fargate Containers
+
+  pClamDefs:
+    Type: String
+    Default: clamavdefs
+    Description: Name of the ECR Repo created earlier. Recommendation is to keep the default name.
+
+  pS3BucketName:
+    Type: String
+    Default: S3-BUCKET-NAME-HERE
+    Description: Replace this with the name of your desired S3 bucket to host ClamAV definitions.
+
+###
+### Resources
+###
+
+Resources:
+
+  rFargateTaskExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: s3
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: 's3:*'
+                Resource: '*'
+        - PolicyName: ECS-logs
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: '*'
+        - PolicyName: ecr
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ecr:BatchCheckLayerAvailability'
+                  - 'ecr:GetDownloadUrlForLayer'
+                  - 'ecr:BatchGetImage'
+                Resource: !Join
+                  - ''
+                  - - '*'
+              - Effect: Allow
+                Action:
+                  - 'ecr:GetAuthorizationToken'
+                Resource: '*'
+
+  rECSTaskExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: ECSClamTaskExecutionRolePolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ecr:GetAuthorizationToken'
+                  - 'ecr:BatchCheckLayerAvailability'
+                  - 'ecr:GetDownloadUrlForLayer'
+                  - 'ecr:BatchGetImage'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents' 
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 's3:*'
+                Resource:
+                  - !Sub 'arn:aws-us-gov:s3:::${pS3BucketName}'
+                  - !Sub 'arn:aws-us-gov:s3:::${pS3BucketName}/*'
+
+  rFargateLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /fargate/${AWS::StackName}
+      RetentionInDays: 7
+
+  rFargateTaskDefinition:
+    Type: 'AWS::ECS::TaskDefinition'
+    Properties:
+      Family: 'clamdefs-task'
+      Cpu: '1024'
+      Memory: '2048'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      TaskRoleArn: !GetAtt rFargateTaskExecutionRole.Arn
+      ExecutionRoleArn: !GetAtt rECSTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: 'clamavdefs'
+          Cpu: 1024
+          Memory: 2048
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${pClamDefs}
+          PortMappings:
+            - ContainerPort: 3310
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref rFargateLogGroup
+              awslogs-stream-prefix: !Ref AWS::StackName
+
+  fargateService:
+    Type: 'AWS::ECS::Service'
+    Properties:
+      ServiceName: 'virusscanner-definitions-service'
+      Cluster: 'virusscanner'
+      LaunchType: FARGATE
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 75
+      DesiredCount: 0
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - !Ref rTaskSecurityGroup
+          Subnets: !Ref pSubnetIDs
+      TaskDefinition: !Ref rFargateTaskDefinition
+
+  rClamDefsEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: An event rule to update ClamAV definitions in S3
+      Name: ClamDefsEventRule
+      ScheduleExpression: rate(8 hours)
+      State: ENABLED
+      Targets:
+        - Arn: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${pClamDefs}
+          RoleArn: !GetAtt rECSTaskExecutionRole.Arn
+          Id: '1'
+          EcsParameters:
+            LaunchType: FARGATE
+            PlatformVersion: 1.4.0
+            TaskCount: 1
+            TaskDefinitionArn: !Ref rFargateTaskDefinition
+            NetworkConfiguration:
+              AwsVpcConfiguration:
+                AssignPublicIp: ENABLED
+                SecurityGroups:
+                  - !Ref rTaskSecurityGroup
+                Subnets: !Ref pSubnetIDs
+
+  rTaskSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Security group for event rule
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          Description: Port 443
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+      VpcId: !Ref pVPCId

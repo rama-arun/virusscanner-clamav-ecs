@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Creates an ECR Repo for the clamav definitions updater, and 
+
+Parameters:
+  pRepoName:
+    Type: String
+    Default: clamavdefs
+    Description: The name of the ECR repo for the ClamAV worker. Recommendation is to keep the default name.
+
+  pS3BucketName:
+    Type: String
+    Default: S3-BUCKET-NAME-HERE
+    Description: Replace this with the name of your desired S3 bucket to host ClamAV definitions.
+
+Resources:
+
+  VirusscannerDefsRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub ${pRepoName}
+
+  rS3DefinitionsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${pS3BucketName}
+
+  CustomRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-CustomRole"
+      Path: /
+
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - s3.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+
+      Policies:
+        -
+          PolicyName: !Sub "${AWS::StackName}-CustomRole"
+          PolicyDocument:
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:PutObjectTagging
+                Resource:
+                  - !Sub 'arn:aws-us-gov:s3:::${pS3BucketName}'
+                  - !Sub 'arn:aws-us-gov:s3:::${pS3BucketName}/*'
+
+Outputs:
+  VirusscannerDefsRepoArn:
+    Value: !GetAtt VirusscannerDefsRepo.Arn
+    Export:
+      Name: VirusscannerDefsRepoArn
+
+  RepoNameURI: 
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${pRepoName}"
+    Export:
+      Name: !Sub RepoNameURI-${AWS::StackName}
